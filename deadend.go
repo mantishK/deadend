@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
-	"time"
+	"sync"
 )
 
 type Deadend struct {
@@ -36,41 +36,15 @@ func NewDeadend(sourceURL string) Deadend {
 }
 
 func (deadend *Deadend) Check(sourceURL string, brokenLinkChan chan BrokenLinkMap, doneChan chan bool) {
-	statusChan := make(chan bool, 100)
-	stopStatus := false
-	timer := time.NewTimer(1 * time.Minute)
-	timer.Stop()
-	var count uint64
-	go deadend.checkURL(sourceURL, sourceURL, brokenLinkChan, statusChan)
-	// Keep checking the status, if the no of go routines remain 0 for more than a minute, then send true to doneChan
-	for {
-		select {
-		case status := <-statusChan:
-			if status == true {
-				count++
-				if timer != nil {
-					timer.Stop()
-				}
-			} else {
-				count--
-				if count == 0 {
-					timer = time.NewTimer(1 * time.Minute)
-				}
-			}
-		case <-timer.C:
-			stopStatus = true
-			break
-		}
-		if stopStatus {
-			doneChan <- true
-			break
-		}
-	}
+	waitGroup := &sync.WaitGroup{}
+	waitGroup.Add(1)
+	deadend.checkURL(sourceURL, sourceURL, brokenLinkChan, waitGroup)
+	waitGroup.Wait()
+	doneChan <- true
 }
 
-func (deadend *Deadend) checkURL(sourceURL, linkURL string, brokenLinkChan chan BrokenLinkMap, statusChan chan bool) {
-	statusChan <- true
-	defer func() { statusChan <- false }()
+func (deadend *Deadend) checkURL(sourceURL, linkURL string, brokenLinkChan chan BrokenLinkMap, waitGroup *sync.WaitGroup) {
+	defer waitGroup.Done()
 	if deadend.isVisited(linkURL) {
 		return
 	}
@@ -87,7 +61,8 @@ func (deadend *Deadend) checkURL(sourceURL, linkURL string, brokenLinkChan chan 
 	linkURLs := deadend.extractLinks(body)
 	for _, eachLinkURL := range linkURLs {
 		if eachLinkURL != "" {
-			go deadend.checkURL(linkURL, eachLinkURL, brokenLinkChan, statusChan)
+			waitGroup.Add(1)
+			go deadend.checkURL(linkURL, eachLinkURL, brokenLinkChan, waitGroup)
 		}
 	}
 }
