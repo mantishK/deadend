@@ -17,5 +17,7 @@ Run the following command
 E.g. -   
 `deadendchk http://golang.org`  
 
+**Work In Progress**  
+This code is still under development.
 
 [Golang]:https://golang.org/doc/install
