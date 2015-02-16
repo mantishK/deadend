@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"time"
 )
 
 type Deadend struct {
@@ -34,11 +35,42 @@ func NewDeadend(sourceURL string) Deadend {
 	return deadend
 }
 
-func (deadend *Deadend) Check(sourceURL string, brokenLinkChan chan BrokenLinkMap) {
-	deadend.checkURL(sourceURL, sourceURL, brokenLinkChan)
+func (deadend *Deadend) Check(sourceURL string, brokenLinkChan chan BrokenLinkMap, doneChan chan bool) {
+	statusChan := make(chan bool, 100)
+	stopStatus := false
+	timer := time.NewTimer(1 * time.Minute)
+	timer.Stop()
+	var count uint64
+	go deadend.checkURL(sourceURL, sourceURL, brokenLinkChan, statusChan)
+	// Keep checking the status, if the no of go routines remain 0 for more than a minute, then send true to doneChan
+	for {
+		select {
+		case status := <-statusChan:
+			if status == true {
+				count++
+				if timer != nil {
+					timer.Stop()
+				}
+			} else {
+				count--
+				if count == 0 {
+					timer = time.NewTimer(1 * time.Minute)
+				}
+			}
+		case <-timer.C:
+			stopStatus = true
+			break
+		}
+		if stopStatus {
+			doneChan <- true
+			break
+		}
+	}
 }
 
-func (deadend *Deadend) checkURL(sourceURL, linkURL string, brokenLinkChan chan BrokenLinkMap) {
+func (deadend *Deadend) checkURL(sourceURL, linkURL string, brokenLinkChan chan BrokenLinkMap, statusChan chan bool) {
+	statusChan <- true
+	defer func() { statusChan <- false }()
 	if deadend.isVisited(linkURL) {
 		return
 	}
@@ -55,7 +87,7 @@ func (deadend *Deadend) checkURL(sourceURL, linkURL string, brokenLinkChan chan 
 	linkURLs := deadend.extractLinks(body)
 	for _, eachLinkURL := range linkURLs {
 		if eachLinkURL != "" {
-			go deadend.checkURL(linkURL, eachLinkURL, brokenLinkChan)
+			go deadend.checkURL(linkURL, eachLinkURL, brokenLinkChan, statusChan)
 		}
 	}
 }
@@ -95,6 +127,10 @@ func (deadend *Deadend) extractLinks(body string) []string {
 	links := make([]string, len(matchedArray))
 	for key, matchedItem := range matchedArray {
 		link := matchedItem[1]
+		//check for mailto links, avoid them
+		if strings.HasPrefix(link, "mailto:") {
+			continue
+		}
 		if !(strings.HasPrefix(link, "http") || strings.HasPrefix(link, "www")) {
 			if strings.HasPrefix(link, "/") {
 				link = deadend.baseURL + link
