@@ -13,7 +13,11 @@ func main() {
 
 	brokenLinkChan := make(chan deadend.BrokenLinkMap, 100)
 	doneChan := make(chan bool)
-	deadend := deadend.NewDeadend(sourceURL)
+	deadend, err := deadend.NewDeadend(sourceURL)
+	if err != nil {
+		fmt.Println("Invalid URL")
+		return
+	}
 	go deadend.Check(sourceURL, brokenLinkChan, doneChan)
 	fmt.Println("Fetching the broken links for " + sourceURL)
 	for {

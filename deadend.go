@@ -3,16 +3,15 @@ package deadend
 import (
 	"io/ioutil"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
 )
 
 type Deadend struct {
-	sourceURL string
-	baseURL   string
-	domainExt string
-	visited   map[string]bool
+	url     *url.URL
+	visited map[string]bool
 }
 
 type BrokenLinkMap struct {
@@ -21,18 +20,17 @@ type BrokenLinkMap struct {
 	StatusCode int
 }
 
-func NewDeadend(sourceURL string) Deadend {
-	urlRegex := regexp.MustCompile(`(www|http://www|http://).(([a-zA-Z0-9-]*).([a-z.]+))`)
-	matchedURLs := urlRegex.FindAllStringSubmatch(sourceURL, -1)
-	// Fetch the base url required to prepend to the relative links.
-	baseURL := matchedURLs[0][0]
-	// Fetch the domain name with its extension which is required to test if the links are internal or external
-	domainExt := matchedURLs[0][2]
+func NewDeadend(sourceURL string) (*Deadend, error) {
+	url, err := url.Parse(sourceURL)
+	if err != nil {
+		return nil, err
+	}
+
 	// TODO: find a way to get rid of this map by writing it to the disk,
 	// currently this is memory inefficient for large number of links.
 	visited := make(map[string]bool)
-	deadend := Deadend{sourceURL, baseURL, domainExt, visited}
-	return deadend
+	deadend := Deadend{url, visited}
+	return &deadend, nil
 }
 
 func (deadend *Deadend) Check(sourceURL string, brokenLinkChan chan BrokenLinkMap, doneChan chan bool) {
@@ -88,7 +86,7 @@ func (deadend *Deadend) testFor200(linkURL string) (int, string, error) {
 	if resp.StatusCode == 200 {
 
 		//check if it is external url and only fetch the body if it is not
-		if strings.Contains(linkURL, deadend.domainExt) {
+		if strings.Contains(linkURL, deadend.url.Host) {
 			bodyArray, _ := ioutil.ReadAll(resp.Body)
 			body = string(bodyArray)
 		}
@@ -102,19 +100,19 @@ func (deadend *Deadend) extractLinks(body string) []string {
 	links := make([]string, len(matchedArray))
 	for key, matchedItem := range matchedArray {
 		link := matchedItem[1]
-		//check for mailto links, avoid them
-		if strings.HasPrefix(link, "mailto:") {
+		linkURL, err := url.Parse(link)
+		if err != nil {
 			continue
 		}
-		if !(strings.HasPrefix(link, "http") || strings.HasPrefix(link, "www")) {
-			if strings.HasPrefix(link, "/") {
-				link = deadend.baseURL + link
-			} else {
-				link = deadend.baseURL + "/" + link
-			}
+		linkURL.Host = deadend.url.Host
+
+		//check for mailto links, avoid them
+		if strings.HasPrefix(linkURL.Path, "mailto:") {
+			continue
 		}
-		if !deadend.isVisited(link) {
-			links[key] = link
+
+		if !deadend.isVisited(linkURL.String()) {
+			links[key] = linkURL.String()
 		}
 	}
 	return links
